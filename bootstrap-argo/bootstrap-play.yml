@@ -1,0 +1,4 @@
+---
+- hosts: localhost
+  roles:
+  - install_and_setup_argo 

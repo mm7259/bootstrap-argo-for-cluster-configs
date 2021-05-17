@@ -1,0 +1,6 @@
+cluster-config-git-url: ""
+repo_name: ""
+subscription_folder: ""
+cluster_name: ""
+argocd_cr_folder: ""
+argocd_parent_apps_folder: "" 

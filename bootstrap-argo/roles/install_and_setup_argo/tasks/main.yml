@@ -1,0 +1,75 @@
+---
+- name: Cloning cluster-configs repository
+  delegate_to: localhost
+  ansible.builtin.git:
+    repo: "{{ cluster_config_git_url }}"
+    dest: /tmp/cluster-configs
+
+- name: Render operator subscriptions from cluster-configs repository
+  delegate_to: localhost
+  command:  kustomize build /tmp/{{ repo_name }}/{{ subscription_folder }}/overlays/{{ cluster_name }} -o /tmp/all-subscriptions.yml
+
+- name: Apply rendered subscription file
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: present
+    src: /tmp/all-subscriptions.yml
+
+- name: Wait Until GitOps operator is ready
+  delegate_to: localhost
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: openshift-gitops-operator
+    namespace: openshift-operators 
+  register: r_subscription_gitops
+  retries: 25
+  delay: 5
+  until:
+     - r_subscription_gitops.resources[0].status.currentCSV is defined
+     - r_subscription_gitops.resources[0].status.currentCSV | length > 0
+
+- name: Render ArgoCD Custom Resources
+  delegate_to: localhost
+  command: kustomize build /tmp/{{ repo_name }}/{{ argocd_cr_folder }}/overlays/{{ cluster_name }} -o /tmp/argo-cd-cr.yml
+
+- name: Configure default ArgoCD instance 
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: present
+    template: /tmp/argo-cd-cr.yml
+    namespace: openshift-gitops
+
+- name: Create repo secret
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: present
+    template: "{{ path_to_encrypted_secret_definition_file }}"
+    namespace: openshift-gitops
+
+- name: Recreate the argocd-cm to force the new configuration to be injected
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: absent
+    name: argocd-cm
+    kind: ConfigMap
+    namespace: openshift-gitops 
+
+- name: Render Argo CD parent application
+  delegate_to: localhost
+  command: kustomize build /tmp/{{ repo_name }}/{{ argocd_parent_apps_folder }}/overlays/{{ cluster_name }} -o /tmp/parent-argo-app.yml
+  
+- name: Apply Parent Argo CD resources
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: present
+    src: /tmp/parent-argo-app.yml
+
+- name: argocd kickstart sync
+  shell:
+    cmd: "./argo-sync.sh"
+  register: result
+  until: result.rc == 0
+  retries: 5
+  delay: 10
+  delegate_to: localhost
